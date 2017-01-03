@@ -10,10 +10,12 @@
 
 ## Usage
 
+```
 mailadm add name@domain.tld
 mailadm list
 mailadm list domain.tld
 mailadm remove name@domain.tld
+```
 
 ## Notice
 
