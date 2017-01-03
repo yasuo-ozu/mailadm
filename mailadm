@@ -1,0 +1,89 @@
+#!/bin/bash
+
+PF_VMAILBOX_FILE=/etc/postfix/vmailbox
+SASL_ADD_CMD="saslpasswd2 -c -p -u"
+SASL_DEL_CMD="saslpasswd2 -d -p -u"
+SASL_LIST_CMD="sasldblistusers2"
+DOVE_PASS_CMD="doveadm pw"
+DOVE_USER_FILE="/etc/dovecot/users"
+
+MAIL_LIST=$(cat $PF_VMAILBOX_FILE | sed -e 's/^\(.*\)\s.*$/\1/' | sort)
+
+if diff <($SASL_LIST_CMD |sed -e 's/^\(.*\):.*$/\1/' | sort) <(echo "$MAIL_LIST") && \
+	diff <(cat $DOVE_USER_FILE | sed -e 's/^\([^:]*\):.*$/\1/' | sort) <(echo "$MAIL_LIST"); then
+	:
+ 	# echo "File consistency test is OK"
+else
+	echo "ERROR: File consistency check failed"
+	exit
+fi
+
+if [ $# -gt 0 ]; then
+	if [ $1 = "list" ]; then
+		if [ $# -eq 2 ]; then
+			echo "$MAIL_LIST" | grep '@'$2 | sed -e 's/^\([^@]*\)@.*$/\1/'
+		else
+			echo "$MAIL_LIST"
+		fi
+		exit
+	fi
+
+	if [ $1 = "add" -a $# -gt 1 ]; then
+		if echo $2 | grep '@' > /dev/null; then
+			if echo "$MAIL_LIST" | egrep "^$2$" > /dev/null; then
+				echo "The account $2 is already exists."
+				exit
+			fi
+			PASS=""
+			while [ -z "$PASS" ]; do
+				echo -n "Input Postfix / Dovecot password: "
+				read PASS
+				if [ -z "$PASS" ]; then
+					echo "Blank password. Type again."
+				fi
+			done
+			PASS_DOVE=$($DOVE_PASS_CMD -p "$PASS")
+			USER=$(echo $2 | sed -e 's/^\([^@]*\)@.*$/\1/')
+			DOMAIN=$(echo $2 | sed -e 's/^[^@]*@\(.*\)$/\1/')
+			echo "Adding user to Postfix..."
+			echo "$PASS" | $SASL_ADD_CMD $DOMAIN $USER
+			echo "$2	$DOMAIN/$USER/" >> $PF_VMAILBOX_FILE
+			echo "Adding user to dovecot..."
+			echo "$2:$PASS_DOVE" >> $DOVE_USER_FILE
+			echo "Success."
+			exit
+		fi
+	fi
+
+	if [ $1 = "remove" -a $# -gt 1 ]; then
+		if echo $2 | grep '@' > /dev/null; then
+			if echo "$MAIL_LIST" | egrep "^$2$" > /dev/null; then
+				echo -n "Do you really want to remove $2 (yes|no) ? "
+				read ASK
+				if [ "$ASK" = "y" -o "$ASK" = "yes" ]; then
+					USER=$(echo $2 | sed -e 's/^\([^@]*\)@.*$/\1/')
+					DOMAIN=$(echo $2 | sed -e 's/^[^@]*@\(.*\)$/\1/')
+					echo "Removing from Postfix..."
+					$SASL_DEL_CMD $DOMAIN $USER
+					sed -i -e '/^'$2'\t.*$/d' $PF_VMAILBOX_FILE
+					echo "Removing from dovecot..."
+					sed -i -e '/^'$2':.*$/d' $DOVE_USER_FILE
+					echo "Success."
+					exit
+				else
+					echo "Cancelled."
+				fi
+				exit
+			else
+				echo "The account $2 does not exists."
+				exit
+			fi
+		fi
+	fi
+fi
+
+echo "Usage:"
+echo "    $0 add username@domain.tld"
+echo "    $0 list [domain.tld]"
+echo "    $0 remove username@domain.tld"
+exit
